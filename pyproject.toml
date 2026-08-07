@@ -1,0 +1,24 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agent-eval-gate"
+version = "0.0.1"
+description = "A ship-decision gate for LLM agents that carries the judge's measured error into the decision."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Mahesh" }]
+keywords = ["llm", "agents", "evaluation", "experimentation", "ab-testing"]
+dependencies = []
+
+[project.optional-dependencies]
+# M2 (the gate) pulls these in; M1's harness and the bias estimator do not.
+stats = ["numpy>=1.26", "scipy>=1.11"]
+dev = ["pytest>=8.0"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agent_eval_gate"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
