@@ -104,3 +104,7 @@ case.is_truth_tied    # True   — but the true difference is zero,
 | **Demo** | one command: an apparent +3% gain rejected, with ground truth confirming | planned |
 
 Starting on function-calling benchmarks, which are cheap to run — no containers, no agent loop. Container-based coding benchmarks follow once the pipeline works end to end.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

@@ -8,7 +8,9 @@ version = "0.0.1"
 description = "A ship-decision gate for LLM agents that carries the judge's measured error into the decision."
 readme = "README.md"
 requires-python = ">=3.10"
-authors = [{ name = "Mahesh" }]
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Mahesh Sadupalli" }]
 keywords = ["llm", "agents", "evaluation", "experimentation", "ab-testing"]
 dependencies = []
 
