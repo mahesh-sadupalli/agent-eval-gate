@@ -1,144 +1,240 @@
-"""Frozen input/output contract for the agent eval gate.
+"""Input/output contract for the agent eval gate (PROTOCOL.md v0.1, section 9).
 
-Interface-first: this file is the fixed boundary between the harness that
-produces measurements and the gate that consumes them. Freezing it before
-either is built is what lets them be built independently. TYPES ONLY --
-no statistics, no I/O.
+The boundary between the M1 harness, which produces paired measurements, and
+the M2 gate, which turns them into a release decision. Types plus validation
+only: no statistics, no I/O.
 
-Key design facts encoded here:
-
-  * CaseResult carries BOTH arms' ground truth. That is what makes the
-    truth-tied differential-bias estimator computable: on cases where both
-    arms share a verifiable outcome the true quality delta is zero, so any
-    judge delta there is pure instrument bias.
-
-  * PRECONDITION -- the judge rubric scoring *_score MUST target the SOFT
-    axis (helpfulness, clarity, explanation quality), while *_ground_truth
-    carries the HARD axis (AST match, tests pass). If the judge merely
-    re-scores the hard axis, both arms land at the same score on every
-    truth-tied case, judge_delta is ~0 everywhere, and the estimator is
-    silently empty -- a null result that reads like a clean bill of health.
-
-  * agreement_vs_truth is for CONTINUOUS judge scores (ICC / Spearman /
-    Krippendorff alpha) -- never Cohen's kappa, which is categorical.
-
-  * VariantSpec pins one shared variant matrix so baseline/candidate pairs
-    stay comparable across every stage of the pipeline.
+Key facts encoded here:
+  * Verified outcomes are binary (1 = the permitted call executed and matched
+    the reference). A missing label is either hidden from this consumer or an
+    invalid measurement with a recorded reason, never a silent 0.
+  * Judge scores are per-arm probabilities of verified success in [0, 1].
+    Invalid judge output is missing, not 0.
+  * All deltas are candidate minus baseline.
+  * Judge-based methods see calibration (C) labels and evaluation (U)
+    predictions only. U labels live in a separate assessment artifact.
+  * Tied cases (both-pass, both-fail) are conditional diagnostics. They do
+    not identify the judge's error on untied cases.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from enum import Enum
+
+PROTOCOL_VERSION = "bfcl-pilot-v0.1"
 
 
 class Verdict(str, Enum):
     SHIP = "ship"
     NO_SHIP = "no_ship"
-    NEED_MORE_N = "need_more_n"
+    UNRESOLVED = "unresolved"
+
+
+class UnresolvedReason(str, Enum):
+    INVALID_MEASUREMENT = "invalid_measurement"
+    INSUFFICIENT_CALIBRATION = "insufficient_calibration"
+    INSUFFICIENT_SAMPLES = "insufficient_samples"
+    INTERVAL_CROSSES_THRESHOLD = "interval_crosses_threshold"
+
+
+class Split(str, Enum):
+    DEVELOPMENT = "development"
+    CALIBRATION = "calibration"
+    EVALUATION = "evaluation"
 
 
 class Position(str, Enum):
-    """Order the two arms were shown to the judge.
+    """Which arm the judge saw as response A.
 
-    The harness MUST balance AB and BA within each comparison so that position
-    bias averages out to noise (killed by n) rather than leaking into the delta.
+    AB: baseline shown as A. BA: candidate shown as A. Balanced assignment
+    is recorded so position effects can be reported; it does not guarantee
+    they cancel.
     """
     AB = "AB"
     BA = "BA"
 
 
-#: Ground truth must be a DISCRETE outcome level (0.0/1.0, or graded bands).
-#: Continuous partial credit -- e.g. SWE-bench fraction-of-tests-passing --
-#: must be banded BEFORE it enters CaseResult. Otherwise exact-equality tie
-#: detection almost never fires, the truth-tied set silently collapses toward
-#: empty, SE -> inf, and the gate returns need_more_n with no error raised.
-GROUND_TRUTH_TOL = 1e-9
+class MethodId(str, Enum):
+    """Decision methods compared in M3 (PROTOCOL.md section 8)."""
+    DIRECT_VERIFICATION = "direct_verification"
+    RAW_JUDGE_THRESHOLD = "raw_judge_threshold"
+    NAIVE_JUDGE_CI = "naive_judge_ci"
+    RESIDUAL_CORRECTION = "residual_correction"
+
+
+class Stratum(str, Enum):
+    """Verified-outcome pattern of one paired case."""
+    BOTH_PASS = "both_pass"
+    BOTH_FAIL = "both_fail"
+    CANDIDATE_ONLY_PASS = "candidate_only_pass"
+    BASELINE_ONLY_PASS = "baseline_only_pass"
+
+
+def _check_label(name: str, label: int | None, invalid_reason: str | None) -> None:
+    if label is not None and label not in (0, 1):
+        raise ValueError(f"{name} must be 0, 1, or None, got {label!r}")
+    if label is not None and invalid_reason is not None:
+        raise ValueError(f"{name} has a label and an invalid reason; pick one")
+
+
+def _check_probability(name: str, p: float | None) -> None:
+    if p is None:
+        return
+    if not math.isfinite(p) or not 0.0 <= p <= 1.0:
+        raise ValueError(f"{name} must be a finite probability in [0, 1], got {p!r}")
 
 
 @dataclass(frozen=True)
 class VariantSpec:
-    """One point in the shared variant matrix.
+    """One agent configuration. Pinned by snapshot and hashes, not aliases.
 
-    A baseline/candidate pair should differ on exactly ONE axis so the measured
-    delta is attributable to that change. Reused across all milestones.
+    Baseline and candidate may be identical: that is the wiring control.
     """
-    model: str            # e.g. "claude-sonnet", "gpt-x", "gemini-y"
-    prompt_variant: str   # e.g. "v0_baseline", "v1_terse"
+    model_snapshot: str          # dated snapshot, e.g. "gpt-4.1-mini-2025-04-14"
+    prompt_hash: str
+    tool_schema_hash: str
     temperature: float
+    top_p: float
+    max_output_tokens: int
+    retrieval: str = "none"      # RAG enters in M4 as a variant, not a gate dependency
 
 
-@dataclass
+@dataclass(frozen=True)
 class CaseResult:
-    """One paired evaluation on a single case: both arms, both judge scores,
-    and BOTH arms' verifiable outcomes."""
+    """One paired case: both arms' verified outcomes and judge scores."""
     case_id: str
-    domain: str                            # "bfcl", "swe_bench_verified", ...
-    baseline_score: float                  # judge score, baseline arm
-    candidate_score: float                 # judge score, candidate arm
-    judge_version: str                     # pin; drift detection keys on this
-    position: Position                     # randomized order actually used
-    baseline_ground_truth: float | None    # verifiable outcome, baseline arm
-    candidate_ground_truth: float | None   # verifiable outcome, candidate arm
+    family_id: str
+    split: Split
+    run_id: str
+    verifier_version: str
+    judge_version: str           # judge snapshot + rubric id
+    baseline_verified: int | None
+    candidate_verified: int | None
+    baseline_score: float | None     # judge P(verified success), baseline arm
+    candidate_score: float | None    # judge P(verified success), candidate arm
+    position: Position | None        # None if the judge was not run
+    replicate: int = 0
+    baseline_invalid_reason: str | None = None
+    candidate_invalid_reason: str | None = None
+    artifact_ref: str | None = None  # pointer to raw records under runs/
+
+    def __post_init__(self) -> None:
+        _check_label("baseline_verified", self.baseline_verified, self.baseline_invalid_reason)
+        _check_label("candidate_verified", self.candidate_verified, self.candidate_invalid_reason)
+        _check_probability("baseline_score", self.baseline_score)
+        _check_probability("candidate_score", self.candidate_score)
 
     @property
-    def judge_delta(self) -> float:
-        """Candidate minus baseline, in judge-score units (still biased)."""
+    def is_measurement_invalid(self) -> bool:
+        return (self.baseline_invalid_reason is not None
+                or self.candidate_invalid_reason is not None)
+
+    @property
+    def verified_delta(self) -> int | None:
+        """Candidate minus baseline verified outcome: -1, 0, 1, or None."""
+        if self.baseline_verified is None or self.candidate_verified is None:
+            return None
+        return self.candidate_verified - self.baseline_verified
+
+    @property
+    def judge_delta(self) -> float | None:
+        """Candidate minus baseline judge probability, or None if either is missing."""
+        if self.baseline_score is None or self.candidate_score is None:
+            return None
         return self.candidate_score - self.baseline_score
 
     @property
+    def stratum(self) -> Stratum | None:
+        b, c = self.baseline_verified, self.candidate_verified
+        if b is None or c is None:
+            return None
+        if b == c:
+            return Stratum.BOTH_PASS if b == 1 else Stratum.BOTH_FAIL
+        return Stratum.CANDIDATE_ONLY_PASS if c == 1 else Stratum.BASELINE_ONLY_PASS
+
+    @property
     def is_truth_tied(self) -> bool:
-        """Both arms share the same verifiable outcome -> true per-case delta is
-        0, so judge_delta on these cases is pure differential bias.
+        """Both arms have the same valid verified outcome.
 
-        Requires discrete ground-truth levels; see GROUND_TRUTH_TOL.
+        The judge delta on these cases is a conditional discrepancy that still
+        contains random error; it is not the bias on untied cases.
         """
-        if self.baseline_ground_truth is None or self.candidate_ground_truth is None:
-            return False
-        return abs(self.baseline_ground_truth
-                   - self.candidate_ground_truth) < GROUND_TRUTH_TOL
+        return self.stratum in (Stratum.BOTH_PASS, Stratum.BOTH_FAIL)
 
 
-@dataclass
-class JudgeReliability:
-    """Per-domain instrument report produced by M1.
-
-    The load-bearing numbers are the signed differential-bias estimate and its
-    conservative bound; agreement_vs_truth is diagnostic.
-    """
-    domain: str
-    agreement_vs_truth: float              # ICC / Spearman / Krippendorff alpha
-    differential_bias_signed: float        # b_hat: mean judge_delta on truth-tied
-    differential_bias_bound: float         # B: upper confidence limit on |b_hat|
-    n_gold: int                            # total gold cases
-    n_truth_tied: int                      # cases the estimate is built on
+@dataclass(frozen=True)
+class StratumDiagnostic:
+    n_cases: int
+    mean_judge_delta: float | None   # None when the stratum is empty
+    mean_residual: float | None      # verified delta minus judge delta
 
 
-@dataclass
+@dataclass(frozen=True)
+class CalibrationReport:
+    """M1 diagnostic on the calibration split. Not consumed by the gate."""
+    run_id: str
+    judge_version: str
+    sampling_design: str             # e.g. "simple random partition of 22 families"
+    n_families: int
+    n_cases: int
+    n_invalid: int
+    residual_mean: float | None      # family-weighted mean of D_f - J_f
+    strata: dict[Stratum, StratumDiagnostic]
+
+
+@dataclass(frozen=True)
 class GateConfig:
-    alpha: float = 0.05                    # corrected across cases (Benjamini-Hochberg)
-    sequential: bool = True                # always-valid p-values (mSPRT) if streaming
-    min_effect: float = 0.0               # smallest delta worth shipping, on the
-                                          # BIAS-CORRECTED scale, not raw
-                                          # judge units (those are biased)
-    use_signed_correction: bool = True    # True: center-correct by b_hat.
-                                          # False: partial-identification bound only.
+    alpha: float = 0.05              # one fixed comparison; no multiplicity correction
+    min_effect: float = 0.05         # delta, proportion scale (5 pp)
+    method: MethodId = MethodId.RESIDUAL_CORRECTION
+
+    def __post_init__(self) -> None:
+        if not 0.0 < self.alpha < 1.0:
+            raise ValueError(f"alpha must be in (0, 1), got {self.alpha!r}")
+        if not -1.0 < self.min_effect < 1.0:
+            raise ValueError(f"min_effect is a proportion in (-1, 1), got {self.min_effect!r}")
 
 
-@dataclass
+@dataclass(frozen=True)
 class GateInput:
+    """What a judge-based method may see: C labels, U predictions only."""
     baseline: VariantSpec
     candidate: VariantSpec
-    cases: list[CaseResult]
-    reliability: list[JudgeReliability]    # one per domain present in cases
+    calibration: list[CaseResult]
+    evaluation: list[CaseResult]
     config: GateConfig = field(default_factory=GateConfig)
+    protocol_version: str = PROTOCOL_VERSION
+
+    def __post_init__(self) -> None:
+        for c in self.calibration:
+            if c.split is not Split.CALIBRATION:
+                raise ValueError(f"{c.case_id}: split {c.split.value} in calibration set")
+        for c in self.evaluation:
+            if c.split is not Split.EVALUATION:
+                raise ValueError(f"{c.case_id}: split {c.split.value} in evaluation set")
+            if c.baseline_verified is not None or c.candidate_verified is not None:
+                raise ValueError(f"{c.case_id}: evaluation labels must not reach the gate")
+        cal_families = {c.family_id for c in self.calibration}
+        overlap = cal_families & {c.family_id for c in self.evaluation}
+        if overlap:
+            raise ValueError(f"families in both splits: {sorted(overlap)}")
 
 
-@dataclass
+@dataclass(frozen=True)
 class GateOutput:
     verdict: Verdict
-    delta_obs: float                          # raw paired judge difference
-    delta_corrected: float                    # delta_obs - b_hat (signed correction)
-    identified_interval: tuple[float, float]  # [low, high], carries differential bias
-    sampling_ci: tuple[float, float]          # noise-only interval (shrinks with n)
-    dominant_term: str                        # "noise" | "differential_bias" | "effect"
-    rationale: str                            # human-readable why
+    reason: UnresolvedReason | None  # set exactly when verdict is UNRESOLVED
+    method: MethodId
+    protocol_version: str
+    estimate: float | None           # primary estimate, proportion scale
+    interval: tuple[float, float] | None  # the one decision interval
+    coverage_scope: str              # what the interval covers, in words
+    components: dict[str, tuple[float, float]] = field(default_factory=dict)
+    rationale: str = ""
+
+    def __post_init__(self) -> None:
+        if (self.verdict is Verdict.UNRESOLVED) != (self.reason is not None):
+            raise ValueError("reason must be set exactly when verdict is unresolved")
+        if self.interval is not None and self.interval[0] > self.interval[1]:
+            raise ValueError(f"empty interval {self.interval!r}")
