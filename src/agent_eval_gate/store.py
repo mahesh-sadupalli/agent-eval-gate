@@ -92,7 +92,7 @@ def _jsonable(obj: Any) -> Any:
     if isinstance(obj, Enum):
         return obj.value
     if isinstance(obj, dict):
-        return {str(k): _jsonable(v) for k, v in obj.items()}
+        return {(k.value if isinstance(k, Enum) else str(k)): _jsonable(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
         return [_jsonable(v) for v in obj]
     return obj
@@ -122,7 +122,7 @@ def judge_accepted(rec: JudgeRecord) -> bool:
 
 
 class RunStore:
-    def __init__(self, root: Path, config: dict):
+    def __init__(self, root: Path, config: dict, log_session: bool = True):
         self.config = config
         self.run_id = config_hash(config)[:16]
         self.dir = Path(root) / self.run_id
@@ -133,7 +133,17 @@ class RunStore:
                 raise RuntimeError(f"{cfg_path} differs from the requested config")
         else:
             cfg_path.write_text(json.dumps(config, indent=2, sort_keys=True))
-        self._append(SESSIONS_FILE, environment())
+        if log_session:
+            self._append(SESSIONS_FILE, environment())
+
+    @classmethod
+    def open(cls, run_dir: Path) -> "RunStore":
+        """Reopen a saved run read-only; its config must still hash to its directory name."""
+        run_dir = Path(run_dir)
+        config = json.loads((run_dir / CONFIG_FILE).read_text())
+        if config_hash(config)[:16] != run_dir.name:
+            raise RuntimeError(f"{run_dir}: config does not match run id")
+        return cls(run_dir.parent, config, log_session=False)
 
     def _append(self, name: str, row: dict) -> None:
         with open(self.dir / name, "a", encoding="utf-8") as f:
