@@ -104,6 +104,8 @@ Replay must reproduce case selection, arm mapping, outcomes, and report aggregat
 
 **Done when:** a clean environment reproduces the report from saved artifacts, and a second operator can follow the documented commands without hidden setup.
 
+**Evidence — 2026-11-24 (written by Claude on request; fake development run only):** `src/agent_eval_gate/report.py` builds a descriptive report from saved records (`report.json` in the run folder): counts, both success rates, case- and family-weighted verified and judge deltas, family-weighted residual mean (`D_f − J_f`), the four strata with counts / mean judge delta / mean residual (empty strata reported as `n = 0` and `None`), AB vs. BA mean judge delta, per-family `D_f`/`J_f`, attempts, retries, seconds, and token usage. No release decision. `replay` re-runs references, re-verifies every saved agent response, re-parses every saved judge response, rebuilds the report, and lists mismatches; `RunStore.open` reopens a run read-only and rejects a folder whose name no longer matches its config hash. Commands: `uv run python -m agent_eval_gate.report runs/<run_id>` and `… --replay`. Tests (fake design with known answer: D = −1, J_f = 0, residual = −1, AB −0.5 / BA +0.5): numbers match by hand; replay of a clean run has no mismatches and leaves every file byte-identical; an altered agent response, an altered judge output, and an edited `report.json` are each detected. `uv run --extra dev pytest` → 115 passed (~55 s; each verification spawns a process). Not yet shown: replay in a clean second environment.
+
 ## Q10. Implementation order and exit checklist
 
 Implement in this order: contract migration → manifest loader → local verifier and isolation → paired agent runner → blinded judge → durable records/resume → report/replay. Test each boundary with fixtures before paid model calls. Gate inference, RAG, MCP, sequential methods, and deployment are outside M1.
@@ -113,7 +115,7 @@ Implement in this order: contract migration → manifest loader → local verifi
 - [x] Development-only verifier, invalid-call, and isolation checks pass. (2026-11-24; memory limit not enforced on macOS)
 - [x] Judge blinding and AB/BA mapping checks pass. (2026-11-24, fake judge)
 - [ ] One full calibration comparison is saved with missingness and cost accounted for.
-- [ ] Replay reproduces recorded verification and aggregates.
+- [x] Replay reproduces recorded verification and aggregates. (2026-11-24, fake run; clean-environment replay still to do)
 - [ ] Actual commands, environment, evidence paths, and limitations are documented.
 - [ ] Evaluation remains reserved; no performance, power, or gate-benefit claim exceeds the evidence.
 
