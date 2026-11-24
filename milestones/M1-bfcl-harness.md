@@ -54,6 +54,8 @@ Parse exactly two finite probabilities in [0,1], then restore baseline/candidate
 
 **Done when:** deterministic fixtures cover AB and BA mapping, missing/out-of-range scores, and the absence of hidden labels from serialized judge requests.
 
+**Evidence — 2026-11-24 (written by Claude on request; fake judge only, no paid calls):** `src/agent_eval_gate/judge.py` holds the `success-probability-v1` prompt, `gpt-4.1-2025-04-14` as default judge, and the AB/BA schedule (seed 20261121; families sorted, equal AB/BA labels shuffled over sorted case IDs; takes only case → family, so splits cannot influence it). The user message carries only task, tool schema, and the two raw responses as A/B. Parser accepts exactly `{"p_A", "p_B"}` with finite non-boolean numbers in [0, 1]; prose, code fences, extra keys, strings, NaN, and out-of-range values are missing judgments, never 0. A missing arm is not judged. `to_case_result` maps A/B back to baseline/candidate into the contract. Tests: balanced within all 26 families; reproducible; blinded (no arm names, agent model, candidate sentence, results, or verifier words in the case-specific content); candidate-minus-baseline sign identical under AB and BA; 10 malformed outputs rejected. `uv run --extra dev pytest` → 97 passed. Shared fakes moved to `tests/fakes.py`.
+
 ## Q6. What is recorded, and what can the gate see?
 
 **Answer:** produce the following artifacts. Names below are planned artifact roles, not existing files or contract fields.
@@ -107,7 +109,7 @@ Implement in this order: contract migration → manifest loader → local verifi
 - [x] Contract and tests agree with the binary fixed-sample protocol. (2026-11-20, 28 tests)
 - [x] Benchmark/source pins and the exact split inventory are validated. (2026-11-24)
 - [x] Development-only verifier, invalid-call, and isolation checks pass. (2026-11-24; memory limit not enforced on macOS)
-- [ ] Judge blinding and AB/BA mapping checks pass.
+- [x] Judge blinding and AB/BA mapping checks pass. (2026-11-24, fake judge)
 - [ ] One full calibration comparison is saved with missingness and cost accounted for.
 - [ ] Replay reproduces recorded verification and aggregates.
 - [ ] Actual commands, environment, evidence paths, and limitations are documented.
