@@ -32,6 +32,10 @@ Compare the resulting value under the pinned exact-match semantics, including tu
 
 **Done when:** development fixtures show a known correct call passes, a changed result fails, invalid calls are rejected, references are stable on replay, and mutation cannot cross runs. No claim of general verifier correctness follows from these checks.
 
+**Evidence — 2026-11-24 (written by Claude on request):** `src/agent_eval_gate/bfcl_functions.py` vendors the 30 local functions (Apache-2.0 notice + modification note); a test checks each body's AST equals the pinned upstream file, and that the bundle is exactly the set the 60 references call. `src/agent_eval_gate/verifier.py`: strict parser (one call to a schema function, `ast.literal_eval` arguments, optional `[call]` wrapper; rejects attribute calls, expressions, `*`/`**`, multiple calls); each call runs in a fresh spawned process (arguments copied by pickling, own temp dir, socket creation disabled, 5 s timeout); reference runs in its own worker; exact match = top-level tuple → list, then `==`. Agent bad call / exception / timeout → fail; reference failure or worker crash → invalid with reason. All 60 references are one literal-keyword call to the case's single schema function (checked). Development fixtures: correct call passes, changed argument fails, 10 rejection cases, `polygon_area` mutation does not reach the caller or a second run, the 12 development references run and replay identically. `uv run --extra dev pytest` → 62 passed.
+
+Limits found: the 512 MB `RLIMIT_AS` memory limit is **not enforced on macOS** (recorded per call as `memory_limit_enforced=False`); the socket patch is a guard inside trusted function code, not an OS sandbox. Both are acceptable here because no model-written code executes — only the 30 audited functions with literal arguments.
+
 ## Q4. How are baseline and candidate paired and isolated?
 
 **Answer:** both arms receive the same question and tool schema, with the single prompt difference in protocol §3. Use separate provider requests without shared conversations, per-arm temporary directories and worker processes, copied inputs, and separate logs. Each case contributes one paired observation; record both arms even if one fails.
@@ -100,7 +104,7 @@ Implement in this order: contract migration → manifest loader → local verifi
 
 - [x] Contract and tests agree with the binary fixed-sample protocol. (2026-11-20, 28 tests)
 - [x] Benchmark/source pins and the exact split inventory are validated. (2026-11-24)
-- [ ] Development-only verifier, invalid-call, and isolation checks pass.
+- [x] Development-only verifier, invalid-call, and isolation checks pass. (2026-11-24; memory limit not enforced on macOS)
 - [ ] Judge blinding and AB/BA mapping checks pass.
 - [ ] One full calibration comparison is saved with missingness and cost accounted for.
 - [ ] Replay reproduces recorded verification and aggregates.
