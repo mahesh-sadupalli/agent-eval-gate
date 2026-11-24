@@ -1,4 +1,6 @@
-"""Shared test fakes: one development-style case and a fake agent provider (no paid calls)."""
+"""Shared test fakes: a development-style case, fake agent and judge providers (no paid calls)."""
+import json
+
 from agent_eval_gate.bfcl import CaseInput
 from agent_eval_gate.contract import Split
 from agent_eval_gate.runner import (
@@ -39,3 +41,27 @@ class FakeProvider:
             raise TransportError("429 rate limited")
         arm = "candidate" if CANDIDATE_SUFFIX in request["messages"][0]["content"] else "baseline"
         return ProviderResponse(self.answers[arm], request["model"], {"total_tokens": 10})
+
+
+class Agent:
+    """Baseline returns the reference call; candidate returns a call with no arguments."""
+
+    def __init__(self, cases, refs, fail_on=(), crash_after=None):
+        self.by_question = {json.dumps(c.question[0]): (refs[c.case_id].ground_truth[0],
+                                                        c.functions[0]["name"]) for c in cases}
+        self.fail_on, self.crash_after, self.calls = set(fail_on), crash_after, 0
+
+    def complete(self, request):
+        self.calls += 1
+        if self.crash_after is not None and self.calls > self.crash_after:
+            raise KeyboardInterrupt("simulated interruption")
+        good, name = self.by_question[json.dumps(request["messages"][1:])]
+        arm = "candidate" if CANDIDATE_SUFFIX in request["messages"][0]["content"] else "baseline"
+        if (name, arm) in self.fail_on:
+            raise TransportError("503")
+        return ProviderResponse(good if arm == "baseline" else f"{name}()", request["model"])
+
+
+class Judge:
+    def complete(self, request):
+        return ProviderResponse('{"p_A": 0.8, "p_B": 0.3}', request["model"])

@@ -8,15 +8,9 @@ import pytest
 from agent_eval_gate.bfcl import BFCL_COMMIT, QUESTIONS_FILE, load_case_inputs, load_references
 from agent_eval_gate.collect import CallBudget, collect
 from agent_eval_gate.contract import Split
-from agent_eval_gate.runner import (
-    BASELINE_PROMPT,
-    CANDIDATE_PROMPT,
-    CANDIDATE_SUFFIX,
-    ProviderResponse,
-    TransportError,
-    make_variant,
-)
+from agent_eval_gate.runner import BASELINE_PROMPT, CANDIDATE_PROMPT, make_variant
 from agent_eval_gate.store import ARMS_FILE, CONFIG_FILE, JUDGE_FILE, RunStore, default_config
+from fakes import Agent, Judge
 
 DATA = Path(__file__).resolve().parents[1] / "data" / "bfcl" / BFCL_COMMIT
 pytestmark = pytest.mark.skipif(not (DATA / QUESTIONS_FILE).is_file(),
@@ -29,30 +23,6 @@ no_sleep = lambda _s: None  # noqa: E731
 def dev():
     cases = [c for c in load_case_inputs(DATA) if c.split is Split.DEVELOPMENT]
     return cases, load_references(DATA)
-
-
-class Agent:
-    """Baseline returns the reference call; candidate returns a call with no arguments."""
-
-    def __init__(self, cases, refs, fail_on=(), crash_after=None):
-        self.by_question = {json.dumps(c.question[0]): (refs[c.case_id].ground_truth[0],
-                                                        c.functions[0]["name"]) for c in cases}
-        self.fail_on, self.crash_after, self.calls = set(fail_on), crash_after, 0
-
-    def complete(self, request):
-        self.calls += 1
-        if self.crash_after is not None and self.calls > self.crash_after:
-            raise KeyboardInterrupt("simulated interruption")
-        good, name = self.by_question[json.dumps(request["messages"][1:])]
-        arm = "candidate" if CANDIDATE_SUFFIX in request["messages"][0]["content"] else "baseline"
-        if (name, arm) in self.fail_on:
-            raise TransportError("503")
-        return ProviderResponse(good if arm == "baseline" else f"{name}()", request["model"])
-
-
-class Judge:
-    def complete(self, request):
-        return ProviderResponse('{"p_A": 0.8, "p_B": 0.3}', request["model"])
 
 
 def setup(tmp_path, dev, model="fake-agent-2026-01-01"):
