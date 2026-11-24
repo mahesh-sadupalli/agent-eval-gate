@@ -44,6 +44,8 @@ Use the prespecified arm execution-order schedule to reduce systematic time/orde
 
 **Done when:** an isolation check proves that an artifact or mutated value produced by one arm is unavailable to the other, and every record has an unambiguous baseline/candidate mapping.
 
+**Evidence — 2026-11-24 (written by Claude on request; fake provider only, no paid calls):** `src/agent_eval_gate/runner.py` holds the §3 prompts, builds a fresh request per arm (system prompt + JSON tool schema, then the unmodified question turns; deep-copied), and runs both arms in the seeded order (seed 20261122 over string-sorted case IDs). Each arm's call goes through the step-3 verifier in its own worker; both arms are always recorded with an explicit `baseline`/`candidate` field. Transport errors: 2 retries with 1 s and 2 s delays, every attempt kept; exhausted retries → invalid `transport_failed`; malformed content → fail, not retried. Tests: arms differ only in the candidate sentence; requests carry no reference call (all 60 cases); order schedule reproducible; arm mapping holds for both orders; identical-config smoke gives two separate records; one development case end to end. `uv run --extra dev pytest` → 74 passed. Still open: real OpenAI provider, model-availability preflight, spending cap.
+
 ## Q5. How is judge scoring randomized and blinded?
 
 **Answer:** use the frozen probability-of-success prompt. Present anonymized A/B calls with the task and schema, excluding agent model names, arm names, verifier outputs, and reference answers. Use the protocol's balanced, family-local order schedule, independent of calibration/evaluation assignment. Save the mapping before scoring.
