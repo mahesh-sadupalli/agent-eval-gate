@@ -20,6 +20,8 @@ Load questions and tool schemas into agent requests. Keep reference calls, expec
 
 **Done when:** the inventory reproduces 12 development, 22 calibration, and 26 reserved evaluation cases; a manifest validation failure prevents a run.
 
+**Evidence — 2026-11-24 (written by Claude on request):** `src/agent_eval_gate/bfcl.py` holds the §7 manifest, the pinned commit, and SHA-256 checksums of both source files; `scripts/fetch_bfcl.py` downloads them into the ignored `data/bfcl/<commit>/` and verifies (both `ok`). Loader checks: checksum, 100 unique source IDs, all 60 manifest IDs present, 4/10/12 families and 12/22/26 cases, no duplicate IDs, every selected reference `exact_match`. Agent data (`load_case_inputs`: question + schemas) and verifier data (`load_references`) load separately; a test confirms no reference call appears in agent inputs. Excluded: 40 IDs = 38 remote-service + `estimate_derivative` 24/25, matching §2. `uv run --extra dev pytest` → 39 passed.
+
 ## Q3. How will execution verification work?
 
 **Answer:** implement a small adapter around the audited local function definitions and exact-result comparison, retaining upstream function bodies and local helpers. The upstream import-time API-key check must not force external-service access for this local slice. Record the extraction/adapter version and dependencies; this is an adapted historical BFCL harness.
@@ -97,7 +99,7 @@ Replay must reproduce case selection, arm mapping, outcomes, and report aggregat
 Implement in this order: contract migration → manifest loader → local verifier and isolation → paired agent runner → blinded judge → durable records/resume → report/replay. Test each boundary with fixtures before paid model calls. Gate inference, RAG, MCP, sequential methods, and deployment are outside M1.
 
 - [x] Contract and tests agree with the binary fixed-sample protocol. (2026-11-20, 28 tests)
-- [ ] Benchmark/source pins and the exact split inventory are validated.
+- [x] Benchmark/source pins and the exact split inventory are validated. (2026-11-24)
 - [ ] Development-only verifier, invalid-call, and isolation checks pass.
 - [ ] Judge blinding and AB/BA mapping checks pass.
 - [ ] One full calibration comparison is saved with missingness and cost accounted for.
